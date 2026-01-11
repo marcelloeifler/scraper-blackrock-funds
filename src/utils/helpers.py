@@ -1,131 +1,59 @@
-import hashlib
 import logging
-import os
 import re
 from datetime import date, datetime, timedelta
 from html import unescape
 from typing import Optional, Tuple, Union
 
 import pandas as pd
-from dateparser import parse
 
 log = logging.getLogger(__name__)
 
 
-def gera_pasta_destino_preco_fechamento(pasta_destino: str, tipo: str) -> str:
-    return os.path.join(pasta_destino, tipo)
-
-
-def adiciona_fuso(
-    last_trade_mic_time: str, diferenca_horas: int, diferenca_minutos: int
-) -> str:
-    """
-    Ajusta o horário aplicando diferença positiva ou negativa.
-
-    Aceita:
-      - last_trade_mic_time: str "YYYY-MM-DD HH:MM:SS", pandas.Timestamp ou datetime.datetime
-      - diferenca_horas: int, numpy.int64, etc.
-      - diferenca_minutos: int, numpy.int64, etc.
-    """
-
-    # --- Normaliza o tipo do horário ---
-    if isinstance(last_trade_mic_time, datetime):
-        dt = last_trade_mic_time
-
-    elif isinstance(last_trade_mic_time, pd.Timestamp):
-        dt = last_trade_mic_time.to_pydatetime()
-
-    elif isinstance(last_trade_mic_time, str):
-        dt = datetime.strptime(last_trade_mic_time, "%Y-%m-%d %H:%M:%S")
-
-    else:
-        raise TypeError(
-            f"Tipo não suportado para last_trade_mic_time: {type(last_trade_mic_time)}"
-        )
-
-    # --- Normaliza tipos numéricos (int, numpy.int64, etc.) ---
-    try:
-        horas = int(diferenca_horas)
-        minutos = int(diferenca_minutos)
-    except Exception as e:
-        raise TypeError(
-            f"Tipos inválidos para diferenca_horas/minutos: "
-            f"{type(diferenca_horas)}, {type(diferenca_minutos)}"
-        ) from e
-
-    # --- Aplica o delta ---
-    delta = timedelta(hours=horas, minutes=minutos)
-    dt_corrigido = dt + delta
-
-    return dt_corrigido.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def limpa_texto_resposta(texto_raw: str) -> str:
-    # Converte entidades HTML (ex: &#160;)
-    texto = unescape(texto_raw)
+def clean_response_text(raw_text: str) -> str:
+    # Convert HTML entities (e.g. &#160;)
+    text = unescape(raw_text)
 
     # Remove soft hyphen (SHY)
-    texto = texto.replace("\u00ad", "")
+    text = text.replace("\u00ad", "")
 
-    # Converte NBSP (não-quebra-de-linha) para espaço normal
-    texto = texto.replace("\xa0", " ")
+    # Convert NBSP (non-breaking space) to normal space
+    text = text.replace("\xa0", " ")
 
-    # Remove outros caracteres invisíveis problemáticos
-    texto = texto.replace("\u200b", "")  # zero width space
-    texto = texto.replace("\uFEFF", "")  # BOM invisível
+    # Remove other problematic invisible characters
+    text = text.replace("\u200b", "")  # zero width space
+    text = text.replace("\uFEFF", "")  # invisible BOM
 
-    return texto
-
-
-def filtrar_numeros_e_caracteres(texto: str, caracteres: list):
-    if pd.isna(texto):
-        return texto
-
-    return "".join(ch for ch in texto if ch.isdigit() or ch in caracteres)
+    return text
 
 
-def converter_data_generica(data_str):
-    if pd.isna(data_str):
-        return None
+def keep_numeric_and_allowed_chars(text: str, characters: list):
+    if pd.isna(text):
+        return text
 
-    dt = parse(data_str, languages=["pt"])
-
-    return dt.strftime("%Y-%m-%d")
+    return "".join(ch for ch in text if ch.isdigit() or ch in characters)
 
 
 def convert_values(
-    value: Optional[str], aceitar_negativo: bool = False
+    value: Optional[str], allow_negative: bool = False
 ) -> Optional[float]:
-    """
-    Conversor de valores
-
-    Parameters
-    ----------
-    value: string ou None
-    aceitar_negativo: se True, permite valores negativos
-
-    Returns
-    -------
-    float se possível, senão None
-    """
     try:
         if value is None:
             return None
 
         value = value.strip()
 
-        # remove espaços, vírgulas e pontos apenas para validar se é numérico
-        pattern_numeric = r"[ ,.]"
-        cleaned = re.sub(pattern_numeric, "", value)
+        # remove spaces, commas and dots only to validate if it's numeric
+        numeric_pattern = r"[ ,.]"
+        cleaned = re.sub(numeric_pattern, "", value)
 
-        if aceitar_negativo:
-            # para validação, aceita um '-' apenas no início
+        if allow_negative:
+            # for validation, allow a '-' only at the beginning
             if cleaned.startswith("-"):
                 cleaned_to_check = cleaned[1:]
             else:
                 cleaned_to_check = cleaned
         else:
-            # se não aceita negativo, qualquer '-' torna inválido
+            # if negatives are not allowed, any '-' makes it invalid
             if "-" in cleaned:
                 return None
             cleaned_to_check = cleaned
@@ -133,49 +61,51 @@ def convert_values(
         if not cleaned_to_check.isnumeric():
             return None
 
-        # Padrões para identificar casas decimais
-        pattern_dot = r"\.\d{2,}$"
-        pattern_comma = r",\d{2,}$"
+        # Patterns to detect decimal places
+        dot_decimal_pattern = r"\.\d{2,}$"
+        comma_decimal_pattern = r",\d{2,}$"
 
-        if re.search(pattern_dot, value):
-            # Ex: "1.234,56" -> "1234.56"
+        if re.search(dot_decimal_pattern, value):
+            # Example: "1,234.56" → "1234.56"
             return float(value.replace(",", "").replace(" ", ""))
 
-        if re.search(pattern_comma, value):
-            # Ex: "1.234,56" -> "1234.56"
+        if re.search(comma_decimal_pattern, value):
+            # Example: "1.234,56" → "1234.56"
             return float(value.replace(".", "").replace(" ", "").replace(",", "."))
 
-        # Sem vírgula como decimal, tenta converter direto (removendo só espaços)
+        # No comma as decimal separator — try direct conversion (remove spaces only)
         return float(value.replace(" ", ""))
 
     except Exception:
-        log.exception(f"'{value}' não é um número válido.")
+        log.exception(f"'{value}' is not a valid number.")
         raise
 
 
-def trata_coluna_numerica(df: pd.DataFrame, lista_colunas: list) -> pd.DataFrame:
-    for coluna in lista_colunas:
-        df[coluna] = df[coluna].astype(str)
-        df[coluna] = df[coluna].apply(
-            lambda x: filtrar_numeros_e_caracteres(x, [",", "."])
+def process_numeric_columns(df: pd.DataFrame, columns: list) -> pd.DataFrame:
+    for column in columns:
+        df[column] = df[column].astype(str)
+        df[column] = df[column].apply(
+            lambda x: keep_numeric_and_allowed_chars(x, [",", "."])
         )
-        df[coluna] = df[coluna].apply(convert_values)
+        df[column] = df[column].apply(convert_values)
 
     return df
 
 
-def substituir_vazios_por_none(df):
-    lista_nulos = ["", "-", "n/a"]
+def replace_empty_with_none(df):
+    null_values = ["", "-", "n/a"]
+
     for col in df.columns:
         df[col] = df[col].apply(
             lambda x: (
                 None
-                if isinstance(x, str) and x.strip().lower() in lista_nulos
+                if isinstance(x, str) and x.strip().lower() in null_values
                 else x.strip() if isinstance(x, str) else x
             )
         )
+
     return df
 
 
-def gera_data_atualizacao(padrao: str = "%Y-%m-%d %H:%M:%S") -> str:
-    return datetime.now().strftime(padrao)
+def get_current_timestamp(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    return datetime.now().strftime(fmt)
